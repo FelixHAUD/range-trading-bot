@@ -65,6 +65,40 @@ All tunable parameters live here. Key ones:
 
 ---
 
+## Orchestrator (`orchestrator.py`)
+
+Development is driven by a multi-agent orchestrator. Run it to build one module at a time:
+
+```bash
+python orchestrator.py <step>   # step = 1–9
+```
+
+**What it does per step:**
+1. `git-manager` agent — creates the feature branch from main
+2. Builder agent (specific to the package) — implements the module and its tests
+3. `test-runner` agent — runs `pytest tests/ -k "not integration" -v`
+4. On green: `git-manager` commits, pushes, merges `--no-ff`, deletes branch
+5. On red: reports failures and stops — nothing is merged
+
+**Agent roles:**
+
+| Agent | Responsibility |
+|-------|---------------|
+| `feeds-builder` | `feeds/` package — normalizer, exchange adapters, manager |
+| `indicators-builder` | `indicators/` package — RSI, MACD, ADX, Volume, CandleAggregator |
+| `strategy-builder` | `strategy/` + `execution/` — engine, guards, dip-buy, hold extension, paper trader |
+| `storage-builder` | `storage/` package — asyncpg pool, CandleStore |
+| `alerts-builder` | `alerts/` package — Telegram sender |
+| `test-runner` | Runs pytest, reports pass/fail with full failure details |
+| `git-manager` | Branch creation, commits, push, `--no-ff` merge, branch cleanup |
+
+Install the orchestrator dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+---
+
 ## Development Workflow
 
 Each module follows this cycle before moving on. **Only one module is in progress at a time.** Do not start the next until all four gates are green.
