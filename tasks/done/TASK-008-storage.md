@@ -2,7 +2,7 @@
 id: TASK-008
 title: "storage: CandleStore + db"
 branch: feature/storage
-status: backlog
+status: done
 depends_on: [TASK-001]
 files:
   - storage/db.py

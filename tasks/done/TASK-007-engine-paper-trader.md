@@ -2,7 +2,7 @@
 id: TASK-007
 title: "strategy: StrategyEngine + execution: PaperTrader"
 branch: feature/engine-paper
-status: backlog
+status: done
 depends_on: [TASK-003, TASK-004, TASK-005, TASK-006]
 files:
   - strategy/engine.py

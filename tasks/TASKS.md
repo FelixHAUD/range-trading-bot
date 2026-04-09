@@ -10,8 +10,8 @@ Master status board. Individual task files live in `tasks/<status>/TASK-NNN-*.md
 | TASK-004 | strategy: BreakoutGuard | feature/breakout-guard | DONE | — |
 | TASK-005 | strategy: DipBuyStrategy + Lot | feature/dip-buy | DONE | — |
 | TASK-006 | strategy: HoldExtension | feature/hold-extension | DONE | TASK-005 |
-| TASK-007 | strategy: StrategyEngine + execution: PaperTrader | feature/engine-paper | BACKLOG | TASK-003, TASK-004, TASK-005, TASK-006 |
-| TASK-008 | storage: CandleStore + db | feature/storage | BACKLOG | TASK-001 |
+| TASK-007 | strategy: StrategyEngine + execution: PaperTrader | feature/engine-paper | DONE | TASK-003, TASK-004, TASK-005, TASK-006 |
+| TASK-008 | storage: CandleStore + db | feature/storage | DONE | TASK-001 |
 | TASK-009 | alerts: TelegramAlert | feature/alerts | DONE | — |
 
 ## Status key
