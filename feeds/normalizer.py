@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from abc import ABC, abstractmethod
 import asyncio
 import json
+import logging
 
 import websockets
 
@@ -44,6 +45,8 @@ class ExchangeNormalizer(ABC):
             try:
                 await self.stream(symbol, interval, callback)
             except Exception as e:
-                print(f"[{self.__class__.__name__}] Feed dropped: {e}. Retry in {delay}s")
+                logging.getLogger("feeds").warning(
+                    f"[{self.__class__.__name__}] Feed dropped: {e}. Retry in {delay}s"
+                )
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 60)

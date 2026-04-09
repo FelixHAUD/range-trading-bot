@@ -1,4 +1,5 @@
 import aiohttp
+import logging
 
 
 class TelegramAlert:
@@ -16,4 +17,4 @@ class TelegramAlert:
                     "parse_mode": "HTML",
                 })
         except Exception as e:
-            print(f"[Alert] Failed to send Telegram message: {e}")
+            logging.getLogger("alerts").error(f"[Alert] Failed to send Telegram message: {e}")
