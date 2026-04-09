@@ -25,6 +25,10 @@ ADX_TREND_THRESHOLD = 25      # ADX above this = trending
 RANGE_LOOKBACK_CANDLES = 2688   # 4 weeks at 15m (4 * 7 * 24 * 4)
 RANGE_RECALC_CANDLES   = 672    # 1 week at 15m  (7 * 24 * 4)
 
+# Bearish guard
+MIN_BEARISH_SIGNALS = 3       # 3 of 4 indicators bearish -> block new buys + scan exits
+MAX_LOT_LOSS_PCT    = 0.07    # force-exit any open lot losing >= 7% when bearish active
+
 # Risk limits
 MAX_DRAWDOWN_PCT   = 0.10     # pause bot if portfolio drops 10%
 MAX_DAILY_LOSS_USD = 100.0

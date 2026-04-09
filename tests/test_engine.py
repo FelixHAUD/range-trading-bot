@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 from feeds.normalizer import NormalizedCandle
 from strategy.engine import StrategyEngine
+from strategy.bearish_guard import BearishGuard
 from strategy.breakout_guard import BreakoutGuard
 from strategy.dip_buy import DipBuyStrategy, Lot
 from strategy.hold_extension import HoldExtension
@@ -34,7 +35,11 @@ def make_candle(close: float, is_closed: bool = True, volume: float = 1000.0) ->
     )
 
 
-def make_engine(min_bullish: int = 2) -> tuple[StrategyEngine, AsyncMock]:
+def make_engine(
+    min_bullish: int = 2,
+    min_bearish: int = 3,
+    max_lot_loss_pct: float = 0.07,
+) -> tuple[StrategyEngine, AsyncMock]:
     alert = AsyncMock()
     engine = StrategyEngine(
         guard=BreakoutGuard(buffer_pct=0.02, confirm_candles=3),
@@ -48,6 +53,8 @@ def make_engine(min_bullish: int = 2) -> tuple[StrategyEngine, AsyncMock]:
         alert=alert,
         support=SUPPORT,
         resistance=RESISTANCE,
+        bearish_guard=BearishGuard(min_bearish=min_bearish, max_lot_loss_pct=max_lot_loss_pct),
+        max_drawdown_pct=0.10,
     )
     return engine, alert
 
@@ -277,3 +284,53 @@ class TestPaperTrader:
         trader.buy(lot)
         pnl = trader.sell(lot, 78.0)
         assert pnl < 0
+
+
+# ── BearishGuard engine integration ──────────────────────────────────────────
+
+class TestBearishGuardEngine:
+    def test_buy_blocked_by_bearish_guard(self):
+        # min_bearish=2: price at 76.5 < midpoint(81.5) + MACD not ready(not bullish) = 2 signals
+        # → PAUSE_BUYS → BUY suppressed even though dip_pct met
+        engine, _ = make_engine(min_bearish=2)
+        run(engine.on_candle(make_candle(82.0)))   # rolling high
+        run(engine.on_candle(make_candle(76.5)))   # -6.7% dip → BUY signal generated, blocked
+        assert len(engine.trader.trades) == 0
+        assert len(engine.dip_buy.open_lots) == 0
+
+    def test_buy_proceeds_when_bearish_guard_inactive(self):
+        # min_bearish=3 (default): only 2 signals (MACD not ready + price below midpoint) → NORMAL
+        engine, _ = make_engine(min_bearish=3)
+        run(engine.on_candle(make_candle(82.0)))
+        run(engine.on_candle(make_candle(76.5)))   # 2 signals < 3 → NORMAL → buy proceeds
+        assert any(t["action"] == "BUY" for t in engine.trader.trades)
+
+    def test_buy_blocked_by_drawdown_limit(self):
+        # Portfolio down >10% → buy blocked regardless of bearish state
+        engine, _ = make_engine(min_bearish=3)
+        engine.trader.balance_usd = 8_999.0   # (10000-8999)/10000 = 10.01% > 10% limit
+        run(engine.on_candle(make_candle(82.0)))
+        run(engine.on_candle(make_candle(76.5)))   # would be BUY signal → blocked
+        assert len(engine.trader.trades) == 0
+
+    def test_bearish_exit_closes_losing_lot(self):
+        # Lot at entry=85.0, price drops to 78.2 (8% loss > 7% threshold).
+        # Price within range (78.2 > 76.44 lower buffer), 2 bearish signals (MACD + price) → PAUSE_BUYS.
+        engine, _ = make_engine(min_bearish=2, max_lot_loss_pct=0.07)
+        lot = Lot(id="lot_test", entry_price=85.0, quantity=250.0 / 85.0,
+                  entry_time=TS, reference_price=85.0)
+        engine.dip_buy.open_lots.append(lot)
+        engine.trader.buy(lot)
+        run(engine.on_candle(make_candle(78.2)))   # 8% loss, bearish, within range
+        assert len(engine.dip_buy.open_lots) == 0
+        assert any(t.get("reason") == "BEARISH_EXIT" for t in engine.trader.trades)
+
+    def test_bearish_guard_does_not_exit_lot_with_small_loss(self):
+        # Same setup but price=81.0 (4.7% loss < 7% threshold) → lot stays open
+        engine, _ = make_engine(min_bearish=2, max_lot_loss_pct=0.07)
+        lot = Lot(id="lot_test", entry_price=85.0, quantity=250.0 / 85.0,
+                  entry_time=TS, reference_price=85.0)
+        engine.dip_buy.open_lots.append(lot)
+        engine.trader.buy(lot)
+        run(engine.on_candle(make_candle(81.0)))   # 4.7% loss, bearish active, but below threshold
+        assert len(engine.dip_buy.open_lots) == 1
