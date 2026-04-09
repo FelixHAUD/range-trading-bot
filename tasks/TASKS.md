@@ -13,6 +13,10 @@ Master status board. Individual task files live in `tasks/<status>/TASK-NNN-*.md
 | TASK-007 | strategy: StrategyEngine + execution: PaperTrader | feature/engine-paper | DONE | TASK-003, TASK-004, TASK-005, TASK-006 |
 | TASK-008 | storage: CandleStore + db | feature/storage | DONE | TASK-001 |
 | TASK-009 | alerts: TelegramAlert | feature/alerts | DONE | — |
+| TASK-010 | feeds: BinanceUSNormalizer geo-block fix | feature/binance-us-fix | DONE | TASK-001 |
+| TASK-011 | ops: dual console + file logging | feature/live-logging | DONE | TASK-007, TASK-009 |
+| TASK-012 | backtest: runner + dynamic RangeDetector | feature/backtest-range-detector | DONE | TASK-007 |
+| TASK-013 | docs: README | feature/readme | DONE | TASK-012 |
 
 ## Status key
 - **BACKLOG** — not started

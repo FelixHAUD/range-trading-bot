@@ -31,3 +31,10 @@ class BinanceNormalizer(ExchangeNormalizer):
             if raw.endswith(quote):
                 return f"{raw[:-len(quote)]}/{quote}"
         return raw
+
+
+class BinanceUSNormalizer(BinanceNormalizer):
+    """Binance.US endpoint — use this in geo-blocked regions (e.g. United States)."""
+
+    def ws_url(self) -> str:
+        return "wss://stream.binance.us:9443/ws"
