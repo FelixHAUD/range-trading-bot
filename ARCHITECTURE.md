@@ -3,31 +3,36 @@
 ## Overview
 
 This document defines the complete architecture for a Python-based crypto range-trading bot.
-The system is designed to exploit price cycling within a defined support/resistance range (e.g. SOL at $78–$85),
-with three composable strategies running simultaneously:
+The system is designed to exploit price cycling within a defined support/resistance range (e.g. SOL at $76–$87),
+with four composable strategies running simultaneously:
 
 1. **Range trading** — buy near support, sell near resistance within a defined band.
 2. **Dip-buy with per-lot tracking** — buy on -5% drawdowns from a rolling high, sell each lot at +5% from its own entry.
 3. **Hold extension** — delay the sell at +5% if momentum indicators confirm the move has further to run, then exit via trailing stop.
+4. **Bearish guard** — when 3+ of 4 indicators turn bearish (RSI < 40, MACD falling, price below midpoint, ADX > 25), block new buys and force-exit open lots losing ≥7%.
 
 A **breakout guard** sits above all strategies and pauses the bot when price exits the range,
 preventing the system from trading into a trending move.
+
+The **range detector** recalculates support/resistance weekly using a 1-week rolling window of 5m candles,
+so the bot adapts automatically when SOL shifts to a new price zone.
 
 ---
 
 ## Project Structure
 
 ```
-sol-range-bot/
+range_trading_bot/
 ├── main.py                    # Entry point — wires everything together
 ├── config.py                  # All tunable parameters in one place
+├── backtest/
+│   └── runner.py              # CLI backtest: --days, --interval, --sweep, etc.
 ├── feeds/
-│   ├── normalizer.py          # ExchangeNormalizer base class
-│   ├── binance.py             # Binance WebSocket implementation
-│   ├── coinbase.py            # Coinbase WebSocket implementation
+│   ├── normalizer.py          # ExchangeNormalizer base class + NormalizedCandle
+│   ├── binance.py             # BinanceNormalizer + BinanceUSNormalizer (geo-block fix)
+│   ├── coinbase.py            # CoinbaseNormalizer
 │   └── manager.py             # PriceFeedManager — runs all feeds concurrently
 ├── indicators/
-│   ├── candles.py             # CandleAggregator — builds 15m/1h/4h candles
 │   ├── rsi.py                 # RSI calculator
 │   ├── macd.py                # MACD calculator
 │   ├── adx.py                 # ADX / directional movement
@@ -35,22 +40,20 @@ sol-range-bot/
 ├── strategy/
 │   ├── engine.py              # StrategyEngine — orchestrates all modules
 │   ├── breakout_guard.py      # BreakoutGuard — pauses bot on range exit
-│   ├── range_strategy.py      # Classic range buy/sell at band edges
+│   ├── bearish_guard.py       # BearishGuard — blocks buys + force-exits in downtrends
+│   ├── range_detector.py      # RangeDetector — weekly dynamic support/resistance
 │   ├── dip_buy.py             # DipBuyStrategy — per-lot -5%/+5% logic
 │   └── hold_extension.py      # HoldExtension — indicator-gated trailing stop
 ├── execution/
 │   ├── order_router.py        # Places live orders via ccxt
-│   ├── paper_trader.py        # Simulates orders without real funds
-│   └── position_tracker.py   # Tracks all open lots, PnL, fees
+│   └── paper_trader.py        # Simulates orders without real funds (default)
 ├── storage/
 │   ├── db.py                  # TimescaleDB connection + schema
 │   └── candle_store.py        # Writes/reads OHLCV data
 ├── alerts/
 │   └── telegram.py            # Sends trade and error notifications
-└── tests/
-    ├── test_breakout_guard.py
-    ├── test_dip_buy.py
-    └── test_hold_extension.py
+├── logs/                      # Auto-created; rotating log files (gitignored)
+└── tests/                     # 180 unit tests; no network/DB required
 ```
 
 ---
@@ -64,38 +67,46 @@ All parameters are defined here so they can be tuned without touching strategy l
 PRIMARY_EXCHANGE   = "binance"
 FALLBACK_EXCHANGE  = "coinbase"
 SYMBOL             = "SOL/USDT"
-INTERVAL           = "15m"
+INTERVAL           = "5m"          # 5m outperforms 15m in ranging SOL markets
 
-# Range boundaries (update manually or automate with range_detector)
+# Range boundaries (initial values — overwritten by RangeDetector after first weekly recalc)
 RANGE_SUPPORT      = 78.0
 RANGE_RESISTANCE   = 85.0
-RANGE_BUFFER_PCT   = 0.02     # 2% outside range triggers breakout guard
-BREAKOUT_CONFIRM_CANDLES = 3  # candles inside range before resuming
+RANGE_BUFFER_PCT   = 0.03          # 3% outside range triggers breakout guard
+BREAKOUT_CONFIRM_CANDLES = 2       # candles inside range before resuming
+
+# Dynamic range detection
+RANGE_LOOKBACK_CANDLES = 2016      # 1 week at 5m (7 * 24 * 12)
+RANGE_RECALC_CANDLES   = 2016      # recalculate range every week
 
 # Dip-buy strategy
-DIP_PCT            = 0.05     # -5% from rolling high to trigger buy
-TARGET_PCT         = 0.05     # +5% from lot entry to trigger sell check
-MAX_LOTS           = 4        # max simultaneous open lots
-LOT_SIZE_USD       = 250      # dollar size per lot
+DIP_PCT            = 0.05          # -5% from rolling high to trigger buy
+TARGET_PCT         = 0.05          # +5% from lot entry to trigger sell check
+MAX_LOTS           = 4             # max simultaneous open lots
+LOT_SIZE_USD       = 250           # dollar size per lot
 
 # Hold extension
-TRAIL_PCT          = 0.02     # trailing stop 2% below running high
-MIN_BULLISH_SIGNALS = 2       # indicators required to extend hold
-ADX_TREND_THRESHOLD = 25      # ADX above this = trending
+TRAIL_PCT          = 0.02          # trailing stop 2% below running high
+MIN_BULLISH_SIGNALS = 2            # indicators required to extend hold
+ADX_TREND_THRESHOLD = 25           # ADX above this = trending
+
+# Bearish guard
+MIN_BEARISH_SIGNALS = 3            # 3 of 4 bearish signals -> block buys + scan exits
+MAX_LOT_LOSS_PCT    = 0.07         # force-exit lot losing >= 7% when bearish active
 
 # Risk limits
-MAX_DRAWDOWN_PCT   = 0.10     # pause bot if portfolio drops 10%
+MAX_DRAWDOWN_PCT   = 0.10          # block new buys if portfolio down 10% from start
 MAX_DAILY_LOSS_USD = 100.0
 
 # Mode
-PAPER_TRADE        = True     # ALWAYS start here; flip to False for live
+PAPER_TRADE        = True          # ALWAYS start here; flip to False for live
 
-# Database
-DB_URL = "postgresql://user:password@localhost:5432/tradebot"
+# Database (credentials from environment only)
+DB_URL = os.getenv("DB_URL", "postgresql://user:password@localhost:5432/tradebot")
 
-# Alerts
-TELEGRAM_TOKEN     = "YOUR_BOT_TOKEN"
-TELEGRAM_CHAT_ID   = "YOUR_CHAT_ID"
+# Alerts (credentials from environment only)
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 ```
 
 ---
@@ -845,22 +856,22 @@ pip install supervisor
 
 ## Known Weaknesses & Mitigations
 
-### 1. Static range boundaries
+### 1. Static range boundaries ✅ ADDRESSED
 **Problem:** `RANGE_SUPPORT` and `RANGE_RESISTANCE` are hardcoded. If SOL shifts to a new range (e.g. $90–$98), the bot sits paused indefinitely.
 
-**Mitigation:** Build an automated range detector that re-calculates support and resistance every 4h using pivot points or Bollinger Band width. Update `config.RANGE_SUPPORT` and `config.RANGE_RESISTANCE` dynamically. Add a Telegram command (`/setrange 90 98`) to update manually mid-session.
+**Resolution:** `strategy/range_detector.py` — `RangeDetector` recalculates support/resistance weekly using a rolling 1-week window of 5m candles. Pre-warmed at startup via `_warm_range_detector()` in `main.py`. `backtest/runner.py` supports `--lookback-weeks` to tune this.
 
 ---
 
-### 2. Lot stacking in a waterfall
+### 2. Lot stacking in a waterfall ✅ ADDRESSED
 **Problem:** If SOL drops 5%, then 10%, then 15%, the bot buys at each -5% interval, accumulating 3–4 lots in a sustained downtrend — not a cycle.
 
-**Mitigation:** Add a minimum time gap between buys (e.g. at least 3 closed candles between lot entries). Also require that the overall portfolio drawdown not exceed `MAX_DRAWDOWN_PCT` before allowing a new lot. Consider requiring RSI < 35 (oversold) as a mandatory condition for any dip buy.
+**Resolution:** `strategy/bearish_guard.py` — `BearishGuard` counts 4 bearish signals (RSI < 40, MACD falling, price below midpoint, ADX > 25). When ≥3 fire, new buys are blocked and open lots losing ≥7% are force-exited. `MAX_DRAWDOWN_PCT = 0.10` is also checked before every buy.
 
 ---
 
 ### 3. Indicator lag
-**Problem:** RSI, MACD, and ADX are all lagging indicators. By the time they confirm a move, the price may have already reversed, especially on 15m candles where moves are fast.
+**Problem:** RSI, MACD, and ADX are all lagging indicators. By the time they confirm a move, the price may have already reversed, especially on fast 5m candles.
 
 **Mitigation:** Add a faster, leading signal such as order book imbalance (bid volume vs. ask volume ratio) or a short-term volume spike detector. Use these as pre-filters before the lagging indicators confirm. The `order_book_mgr` in the data layer is the right place to compute this.
 

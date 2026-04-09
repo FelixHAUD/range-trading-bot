@@ -2,13 +2,16 @@
 
 ## Project Overview
 
-SOL/USDT crypto range-trading bot. Three composable strategies run simultaneously:
+SOL/USDT crypto range-trading bot. Four composable strategies run simultaneously:
 
 1. **Range trading** — buy near support, sell near resistance within a defined band.
 2. **Dip-buy with per-lot tracking** — buy on -5% drawdowns from a rolling high, sell each lot at +5% from its own entry.
 3. **Hold extension** — delay the sell at +5% if momentum indicators confirm further upside, then exit via trailing stop.
+4. **Bearish guard** — when 3+ of 4 indicators turn bearish, block new buys and force-exit open lots that have lost ≥7%.
 
 A **breakout guard** gates all strategies — if price exits the range, the bot pauses entirely.
+
+The **range detector** recalculates support/resistance weekly using a 1-week rolling window of 5m candles — no manual range updates needed when SOL shifts zones.
 
 ---
 
@@ -18,7 +21,7 @@ A **breakout guard** gates all strategies — if price exits the range, the bot 
 |-------|---------|----------------|
 | 1 | `feeds/` | WebSocket ingestion. Produces `NormalizedCandle`. Raw exchange data never leaves this layer. |
 | 2 | `indicators/` | Stateful calculators (RSI, MACD, ADX, Volume). Accept candles, expose a single `.value`. |
-| 2 | `strategy/` | `StrategyEngine` orchestrates all modules. `BreakoutGuard` → `DipBuyStrategy` → `HoldExtension`. |
+| 2 | `strategy/` | `StrategyEngine` orchestrates all modules. `BreakoutGuard` → `BearishGuard` → `DipBuyStrategy` → `HoldExtension`. `RangeDetector` updates support/resistance weekly. |
 | 3 | `execution/` | `PaperTrader` (default) or `OrderRouter` (live via ccxt). |
 | 4 | `storage/` | TimescaleDB via asyncpg. `CandleStore` writes closed candles. |
 | 4 | `alerts/` | Telegram notifications for trades and errors. |
@@ -53,14 +56,20 @@ All tunable parameters live here. Key ones:
 
 | Parameter | Default | Notes |
 |-----------|---------|-------|
-| `RANGE_SUPPORT` / `RANGE_RESISTANCE` | 78.0 / 85.0 | Update manually when SOL shifts range |
-| `RANGE_BUFFER_PCT` | 0.02 | 2% outside range triggers breakout guard |
-| `BREAKOUT_CONFIRM_CANDLES` | 3 | Candles inside range before resuming |
+| `INTERVAL` | `5m` | Candle timeframe — 5m outperforms 15m in ranging SOL markets |
+| `RANGE_SUPPORT` / `RANGE_RESISTANCE` | 78.0 / 85.0 | Initial values; overwritten by RangeDetector after first weekly recalc |
+| `RANGE_BUFFER_PCT` | 0.03 | 3% outside range triggers breakout guard (widened from 2% per sweep results) |
+| `BREAKOUT_CONFIRM_CANDLES` | 2 | Candles inside range before resuming (reduced from 3 per sweep results) |
+| `RANGE_LOOKBACK_CANDLES` | 2016 | 1 week of 5m candles (7 × 24 × 12) |
+| `RANGE_RECALC_CANDLES` | 2016 | Recalculate range every week |
 | `DIP_PCT` / `TARGET_PCT` | 0.05 / 0.05 | -5% to buy, +5% to check sell |
 | `MAX_LOTS` | 4 | Max simultaneous open lots |
 | `LOT_SIZE_USD` | 250 | Dollar size per lot |
 | `TRAIL_PCT` | 0.02 | Trailing stop 2% below running high |
 | `MIN_BULLISH_SIGNALS` | 2 | Indicators required to extend hold |
+| `MIN_BEARISH_SIGNALS` | 3 | Bearish indicators (of 4) required to pause buys |
+| `MAX_LOT_LOSS_PCT` | 0.07 | Force-exit lot if down 7% while bearish guard active |
+| `MAX_DRAWDOWN_PCT` | 0.10 | Block new buys if portfolio is down 10% from start |
 | `PAPER_TRADE` | True | **Always start here** |
 
 ---
@@ -185,15 +194,20 @@ git branch -d feature/<module-name>
 | 7 | `feature/engine-paper` | `strategy/engine.py` + `execution/paper_trader.py` | Full paper run on live feed; PnL tracking accurate |
 | 8 | `feature/storage` | `storage/db.py`, `storage/candle_store.py` | Candle and trade round-trips; no duplicates; schema matches |
 | 9 | `feature/alerts` | `alerts/telegram.py` | Messages sent on BUY, SELL, TRAIL_STOP_HIT, and breakout pause |
-| 10 | — | End-to-end paper trading | 2–4 weeks; review fill rates, guard frequency, fee-adjusted PnL |
+| 10 | `feature/binance-us-fix` | `feeds/binance.py` | BinanceUSNormalizer subclass pointing at stream.binance.us:9443 |
+| 11 | `feature/live-logging` | `main.py` | Dual console + rotating file logging; suppresses websockets DEBUG noise |
+| 12 | `feature/backtest-range-detector` | `backtest/runner.py`, `strategy/range_detector.py` | RangeDetector recalcs weekly; backtest CLI flags all work |
+| 13 | `feature/bearish-guard` | `strategy/bearish_guard.py`, `strategy/engine.py` | 3+ bearish signals block buys; force-exits lots at ≥7% loss |
+| — | — | End-to-end paper trading | 2–4 weeks; review fill rates, guard frequency, fee-adjusted PnL |
 
 ---
 
 ## Known Risks
 
-- **Static range boundaries** — if SOL moves to a new range, the bot pauses indefinitely. Consider a `/setrange` Telegram command for manual updates.
-- **Lot stacking in downtrends** — enforce a minimum candle gap between lot entries; require `MAX_DRAWDOWN_PCT` check before new lots.
-- **Indicator lag** — RSI/MACD/ADX are lagging. On 15m candles, moves can reverse before confirmation. Consider order book imbalance as a leading pre-filter.
+- **Dynamic range may lag during fast breakouts** — `RangeDetector` recalcs weekly using a 1-week lookback. A sharp move (e.g. SOL pumps to $97) will be captured in the range for a full week even after price retreats. Use `--lookback-weeks 1` in backtest to check tighter windows.
+- **Bearish guard signal count is a blunt instrument** — 3-of-4 works well for SOL on 5m candles but may need tuning for other assets or regimes. All 4 signals (RSI, MACD, price vs midpoint, ADX) are lagging.
+- **Indicator lag** — RSI/MACD/ADX are lagging. On fast 5m moves reversals can happen before confirmation. Consider order book imbalance as a leading pre-filter.
 - **Exchange downtime** — `stream_with_retry` handles reconnection. Add REST fallback via `ccxt.fetch_ohlcv` if no candle arrives for >2 minutes.
 - **Fee drag** — at 0.1% per trade with 4 lots per cycle, fees consume ~0.8% of each range cycle's profit.
 - **Paper-to-live gap** — paper trading ignores slippage, partial fills, and withdrawal limits. Forward-test with minimum lot sizes ($25) for at least 2–4 weeks before going live.
+- **Coinbase feed produces no candles** — Coinbase lists SOL/USD, not SOL/USDT. The feed connects but yields nothing; Binance.US is the effective sole feed.
