@@ -18,6 +18,7 @@ from indicators.volume import VolumeTracker
 from strategy.breakout_guard import BreakoutGuard
 from strategy.dip_buy import DipBuyStrategy
 from strategy.hold_extension import HoldExtension
+from strategy.bearish_guard import BearishGuard
 from strategy.range_detector import RangeDetector
 from strategy.engine import StrategyEngine
 from execution.paper_trader import PaperTrader
@@ -134,6 +135,11 @@ async def main():
         alert=alert,
         support=detector.support,
         resistance=detector.resistance,
+        bearish_guard=BearishGuard(
+            min_bearish=config.MIN_BEARISH_SIGNALS,
+            max_lot_loss_pct=config.MAX_LOT_LOSS_PCT,
+        ),
+        max_drawdown_pct=config.MAX_DRAWDOWN_PCT,
         range_detector=detector,
     )
 

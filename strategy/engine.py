@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from feeds.normalizer import NormalizedCandle
+from strategy.bearish_guard import BearishGuard
 from strategy.breakout_guard import BreakoutGuard
 from strategy.dip_buy import DipBuyStrategy
 from strategy.hold_extension import HoldExtension
@@ -29,6 +30,8 @@ class StrategyEngine:
         alert,
         support: float,
         resistance: float,
+        bearish_guard: BearishGuard | None = None,
+        max_drawdown_pct: float = 1.0,
         range_detector: "RangeDetector | None" = None,
     ):
         self.guard = guard
@@ -42,7 +45,10 @@ class StrategyEngine:
         self.alert = alert
         self.support = support
         self.resistance = resistance
+        self.bearish_guard = bearish_guard
+        self.max_drawdown_pct = max_drawdown_pct
         self.range_detector = range_detector
+        self._initial_balance: float = trader.balance_usd
         self._log = logging.getLogger("engine")
 
     def _log_tick(self, candle: NormalizedCandle) -> None:
@@ -78,24 +84,53 @@ class StrategyEngine:
 
         # Breakout guard gates everything
         if not self.guard.check(candle.close, self.support, self.resistance):
-            self._log.warning(f"[GUARD] PAUSED — breakout at ${candle.close:.2f}")
+            self._log.warning(f"[GUARD] PAUSED -- breakout at ${candle.close:.2f}")
             await self.alert.send(
-                f"PAUSED — breakout detected at ${candle.close:.2f}"
+                f"PAUSED -- breakout detected at ${candle.close:.2f}"
             )
             return
 
+        # RSI defaults to neutral (50) when not yet warmed up — avoids false bearish signals
         indicators = {
-            "rsi": self.rsi.value if self.rsi.value is not None else 0.0,
+            "rsi": self.rsi.value if self.rsi.value is not None else 50.0,
             "macd_bullish": self.macd.bullish,
             "volume_above_avg": self.volume.above_average,
             "adx": self.adx.value,
         }
+
+        # Bearish guard evaluation
+        bearish_state = "NORMAL"
+        if self.bearish_guard is not None:
+            bearish_state = self.bearish_guard.evaluate(
+                candle.close, self.support, self.resistance, indicators
+            )
+            if bearish_state == "PAUSE_BUYS":
+                self._log.warning(
+                    f"[BEARISH] Buys paused | ${candle.close:.2f} "
+                    f"| RSI:{indicators['rsi']:.1f} ADX:{indicators['adx']:.1f}"
+                )
 
         signals = self.dip_buy.on_candle(candle.close, candle.timestamp)
 
         for sig in signals:
             if sig["action"] == "BUY":
                 lot = sig["lot"]
+
+                # Gate: skip buy if bearish guard is active
+                if bearish_state == "PAUSE_BUYS":
+                    self._log.info(f"    BUY skipped -- bearish guard active")
+                    self.dip_buy.close_lot(lot.id)
+                    continue
+
+                # Gate: skip buy if portfolio drawdown limit hit
+                drawdown = (self._initial_balance - self.trader.balance_usd) / self._initial_balance
+                if drawdown >= self.max_drawdown_pct:
+                    self._log.warning(
+                        f"    BUY skipped -- drawdown {drawdown:.1%} >= limit {self.max_drawdown_pct:.0%}"
+                    )
+                    self.dip_buy.close_lot(lot.id)
+                    continue
+
                 self.trader.buy(lot)
                 self._log.info(
                     f">>> BUY  {lot.id} @ ${lot.entry_price:.2f} | "
@@ -124,4 +159,18 @@ class StrategyEngine:
                     # HOLD: keep lot open, do nothing
                     self._log.debug(
                         f"    HOLD {lot.id} | gain target hit, extending hold"
+                    )
+
+        # Bearish lot scan — when guard is active, force-exit open lots with deep losses
+        if bearish_state == "PAUSE_BUYS" and self.bearish_guard is not None:
+            for lot in list(self.dip_buy.open_lots):
+                if self.bearish_guard.should_exit_lot(lot, candle.close):
+                    pnl = self.trader.sell(lot, candle.close, reason="BEARISH_EXIT")
+                    self.dip_buy.close_lot(lot.id)
+                    self._log.info(
+                        f">>> BEARISH_EXIT {lot.id} @ ${candle.close:.2f} | "
+                        f"PnL:${pnl:+.2f} | Bal:${self.trader.balance_usd:,.2f}"
+                    )
+                    await self.alert.send(
+                        f"BEARISH_EXIT {lot.id} @ ${candle.close:.2f} | PnL: ${pnl:.2f}"
                     )
