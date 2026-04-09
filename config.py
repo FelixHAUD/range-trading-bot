@@ -29,8 +29,9 @@ MAX_DAILY_LOSS_USD = 100.0
 PAPER_TRADE        = True     # ALWAYS start here; flip to False for live
 
 # Database
-DB_URL = "postgresql://user:password@localhost:5432/tradebot"
+import os
+DB_URL = os.getenv("DB_URL", "postgresql://user:password@localhost:5432/tradebot")
 
 # Alerts
-TELEGRAM_TOKEN     = "YOUR_BOT_TOKEN"
-TELEGRAM_CHAT_ID   = "YOUR_CHAT_ID"
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")

@@ -6,8 +6,8 @@ import ccxt.async_support as ccxt
 class OrderRouter:
     def __init__(self, exchange_id: str = "binance"):
         self._exchange = getattr(ccxt, exchange_id)({
-            "apiKey": os.getenv("EXCHANGE_API_KEY"),
-            "secret": os.getenv("EXCHANGE_API_SECRET"),
+            "apiKey": os.getenv("BINANCE_API_KEY"),
+            "secret": os.getenv("BINANCE_SECRET"),
         })
 
     async def buy(self, symbol: str, quantity: float) -> dict:
