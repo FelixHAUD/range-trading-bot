@@ -30,6 +30,7 @@ from indicators.volume import VolumeTracker
 from strategy.breakout_guard import BreakoutGuard
 from strategy.dip_buy import DipBuyStrategy
 from strategy.hold_extension import HoldExtension
+from strategy.bearish_guard import BearishGuard
 from strategy.range_detector import RangeDetector
 from strategy.engine import StrategyEngine
 from execution.paper_trader import PaperTrader
@@ -95,6 +96,11 @@ async def _run(candles: list[NormalizedCandle]) -> tuple[PaperTrader, StrategyEn
         alert=_NoAlert(),
         support=config.RANGE_SUPPORT,
         resistance=config.RANGE_RESISTANCE,
+        bearish_guard=BearishGuard(
+            min_bearish=config.MIN_BEARISH_SIGNALS,
+            max_lot_loss_pct=config.MAX_LOT_LOSS_PCT,
+        ),
+        max_drawdown_pct=config.MAX_DRAWDOWN_PCT,
         range_detector=detector,
     )
 
@@ -103,7 +109,6 @@ async def _run(candles: list[NormalizedCandle]) -> tuple[PaperTrader, StrategyEn
     prev_resistance = engine.resistance
 
     for candle in candles:
-        was_paused = not engine.guard.check.__self__.paused if hasattr(engine.guard.check, '__self__') else True
         await engine.on_candle(candle)
         # Count breakout pauses by checking guard state after each candle
         if engine.guard.paused:
