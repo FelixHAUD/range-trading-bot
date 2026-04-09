@@ -2,7 +2,7 @@
 id: TASK-004
 title: "strategy: BreakoutGuard"
 branch: feature/breakout-guard
-status: backlog
+status: done
 depends_on: []
 files:
   - strategy/breakout_guard.py

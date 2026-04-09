@@ -2,7 +2,7 @@
 id: TASK-001
 title: "feeds: normalizer, Binance, Coinbase"
 branch: feature/feeds-normalizer
-status: ready-for-review
+status: done
 depends_on: []
 files:
   - feeds/normalizer.py

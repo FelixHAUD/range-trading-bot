@@ -2,7 +2,7 @@
 id: TASK-002
 title: "feeds: PriceFeedManager"
 branch: feature/feeds-manager
-status: backlog
+status: done
 depends_on: [TASK-001]
 files:
   - feeds/manager.py
@@ -14,11 +14,11 @@ Implement `PriceFeedManager`: runs multiple exchange feeds concurrently via
 `asyncio.gather`, deduplicates candles, and fans out to all subscribers.
 
 ## Acceptance criteria
-- [ ] All unit tests pass
-- [ ] Deduplication key: `f"{exchange}:{timestamp}:{interval}"`
-- [ ] Seen-set pruned when it exceeds 10 000 entries (keeps last 5 000)
-- [ ] Multiple subscribers all receive each candle
-- [ ] No hardcoded credentials
+- [x] All unit tests pass (15/15)
+- [x] Deduplication key: `f"{exchange}:{timestamp}:{interval}"`
+- [x] Seen-set pruned when it exceeds 10 000 entries (keeps last 5 000)
+- [x] Multiple subscribers all receive each candle
+- [x] No hardcoded credentials
 
 ## Implementation notes
 From ARCHITECTURE.md §feeds/manager.py:
@@ -36,3 +36,8 @@ class PriceFeedManager:
 ```
 Dedup: key = `exchange:timestamp:interval`; skip if already seen.
 Prune: when `len(self._seen) > 10_000`, keep last 5 000.
+
+## Test results
+```
+15 passed in 2.38s
+```

@@ -2,7 +2,7 @@
 id: TASK-006
 title: "strategy: HoldExtension"
 branch: feature/hold-extension
-status: backlog
+status: done
 depends_on: [TASK-005]
 files:
   - strategy/hold_extension.py

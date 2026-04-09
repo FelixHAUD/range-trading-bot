@@ -2,7 +2,7 @@
 id: TASK-009
 title: "alerts: TelegramAlert"
 branch: feature/alerts
-status: backlog
+status: done
 depends_on: []
 files:
   - alerts/telegram.py

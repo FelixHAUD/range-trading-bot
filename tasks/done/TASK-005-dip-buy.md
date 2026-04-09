@@ -2,7 +2,7 @@
 id: TASK-005
 title: "strategy: DipBuyStrategy + Lot"
 branch: feature/dip-buy
-status: backlog
+status: done
 depends_on: []
 files:
   - strategy/dip_buy.py
