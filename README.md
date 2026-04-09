@@ -4,9 +4,10 @@ A paper-first crypto trading bot for SOL/USDT. Three strategies run simultaneous
 
 1. **Dip-buy** — buys on -5% drops from a rolling 5-hour high, checks sell at +5% per lot
 2. **Hold extension** — if 2+ indicators are bullish at the +5% target, holds with a 2% trailing stop instead of selling immediately
-3. **Breakout guard** — pauses all trading if price exits the range, resumes after 3 confirm candles back inside
+3. **Breakout guard** — pauses all trading if price exits the range, resumes after 2 confirm candles back inside
+4. **Bearish guard** — when 3+ indicators turn bearish, blocks new buys and force-exits losing lots
 
-The range boundaries update automatically each week using the prior 4 weeks of price data — no manual config edits needed when SOL shifts zones.
+The range boundaries update automatically each week using the prior week of price data — no manual config edits needed when SOL shifts zones.
 
 ---
 
@@ -69,14 +70,19 @@ All tunable parameters are in `config.py`. The key ones:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
+| `INTERVAL` | `5m` | Candle timeframe — 5m candles outperform 15m in ranging markets |
 | `RANGE_SUPPORT` | 78.0 | Initial support — overwritten after first weekly recalc |
 | `RANGE_RESISTANCE` | 85.0 | Initial resistance — overwritten after first weekly recalc |
+| `RANGE_BUFFER_PCT` | 0.03 | 3% band outside range before breakout guard triggers |
+| `BREAKOUT_CONFIRM_CANDLES` | 2 | Candles back inside range before resuming |
 | `DIP_PCT` | 0.05 | Buy trigger: -5% from rolling high |
 | `TARGET_PCT` | 0.05 | Sell check trigger: +5% from lot entry |
 | `MAX_LOTS` | 4 | Max simultaneous open positions |
 | `LOT_SIZE_USD` | 250 | Dollar size per lot |
 | `TRAIL_PCT` | 0.02 | Trailing stop: 2% below running high |
 | `MIN_BULLISH_SIGNALS` | 2 | Indicators needed to extend hold past +5% |
+| `MIN_BEARISH_SIGNALS` | 3 | Bearish indicators needed to block buys |
+| `MAX_LOT_LOSS_PCT` | 0.07 | Force-exit lot if down 7% while bearish guard active |
 | `PAPER_TRADE` | True | **Always start here** |
 
 ---
@@ -105,20 +111,20 @@ python main.py
 ```
 
 On startup the bot will:
-1. Fetch 4 weeks of historical candles to warm up the dynamic range detector
+1. Fetch 1 week of historical 5m candles to warm up the dynamic range detector
 2. Log the detected support/resistance levels
 3. Connect to Binance.US and Coinbase WebSocket feeds
-4. Print a live tick line every 15 minutes showing price, indicators, and balance
+4. Print a live tick line every 5 minutes showing price, indicators, and balance
 
 Example console output:
 ```
-2026-04-09 10:00:00 [INFO] Range warmed up: support=$78.50  resistance=$96.20  (2688 candles)
-2026-04-09 10:00:00 [INFO] Starting PAPER trading -- SOL/USDT @ 15m
-2026-04-09 10:00:00 [INFO] Initial range: $78.50 -- $96.20
+2026-04-09 10:00:00 [INFO] Range warmed up: support=$78.50  resistance=$84.20  (2016 candles)
+2026-04-09 10:00:00 [INFO] Starting PAPER trading -- SOL/USDT @ 5m
+2026-04-09 10:00:00 [INFO] Initial range: $78.50 -- $84.20
 2026-04-09 10:00:00 [INFO] Initial balance: $10,000.00
-2026-04-09 10:15:00 [INFO] [10:15] SOL/USDT $82.41 hi:$86.90 | RSI:48.2 MACD:- ADX:18.3 Vol:v | Lots:0/4 | Bal:$10,000.00
-2026-04-09 10:30:00 [INFO] [10:30] SOL/USDT $80.20 hi:$86.90 | RSI:41.1 MACD:- ADX:21.4 Vol:^ | Lots:0/4 | Bal:$10,000.00
-2026-04-09 10:30:00 [INFO] >>> BUY  lot_xxx @ $80.20 | 3.1172 SOL | dip from $86.90
+2026-04-09 10:05:00 [INFO] [10:05] SOL/USDT $82.41 hi:$86.90 | RSI:48.2 MACD:- ADX:18.3 Vol:v | Lots:0/4 | Bal:$10,000.00
+2026-04-09 10:10:00 [INFO] [10:10] SOL/USDT $80.20 hi:$86.90 | RSI:41.1 MACD:- ADX:21.4 Vol:^ | Lots:0/4 | Bal:$10,000.00
+2026-04-09 10:10:00 [INFO] >>> BUY  lot_xxx @ $80.20 | 3.1172 SOL | dip from $86.90
 ```
 
 Logs are also written to `logs/bot.log` (rotates at 10 MB, keeps 5 files).
@@ -135,7 +141,7 @@ Ctrl+C
 
 Replay historical candles through the exact same strategy engine used in production.
 
-### Default (last 90 days)
+### Default (last 90 days, using config settings)
 
 ```bash
 python backtest/runner.py
@@ -144,46 +150,46 @@ python backtest/runner.py
 ### Custom number of days
 
 ```bash
-python backtest/runner.py --days 180
+python backtest/runner.py --days 28
 ```
 
 ### Specific date range
 
 ```bash
-python backtest/runner.py --start 2024-10-01 --end 2025-01-01
+python backtest/runner.py --start 2025-10-01 --end 2026-01-01
 ```
 
-Example output:
-```
-Fetching SOL/USDT 15m candles from Binance.US...
-Fetched 8,640 candles.
+### Override individual parameters
 
-================================================
-  BACKTEST: SOL/USDT 15m
-================================================
-  Period       : 2024-10-01 -> 2025-01-01  (92 days)
-  Candles      : 8,640
-  Range        : dynamic -- weekly recalc, 4-week lookback
-  Final range  : $78.50 to $96.20
-
-  Closed lots  : 14
-  Gross PnL    : $+187.42
-  Est. fees    : -$14.00  (0.1% per side)
-  Net PnL      : $+173.42
-  Win rate     : 71.4%  (10W / 4L)
-  Avg win      : $+28.50
-  Avg loss     : $-18.30
-  Best trade   : $+61.20  lot_xxx  (TRAIL_STOP_HIT)
-  Worst trade  : $-31.50  lot_xxx  (SELL)
-
-  Max drawdown     : -$48.20
-  Breakout pauses  : 7
-  Open lots at end : 1  (unrealised $+5.20)
-  Final balance    : $10,173.42
-================================================
+```bash
+# Test 5m candles with a 1-week lookback, 3% buffer, and 2 confirm candles
+python backtest/runner.py --days 28 --interval 5m --lookback-weeks 1 --buffer-pct 0.03 --confirm-candles 2
 ```
 
-> **Tip:** If you see very few trades and many breakout pauses, SOL was trending (not ranging) during that period. Try a different date range or widen the range parameters in `config.py`.
+| Flag | Description | Example |
+|------|-------------|---------|
+| `--interval` | Candle timeframe | `5m`, `15m` |
+| `--lookback-weeks` | Range detector lookback window | `1`, `2`, `4` |
+| `--buffer-pct` | Breakout guard band | `0.02`, `0.03`, `0.04` |
+| `--confirm-candles` | Candles inside range before resuming | `1`, `2`, `3` |
+
+### Parameter sweep — find the best config
+
+Runs all combinations of interval × lookback × buffer × confirm (54 total) and prints a ranked table:
+
+```bash
+python backtest/runner.py --days 28 --sweep
+```
+
+Example sweep output:
+```
+Rank  Intv  Look    Buf  Conf  Closed    Net PnL   Win%  Open  Pauses
+   1    5m    1wk   3.0%     2       1  $  +12.40   100%     0    2078
+   2    5m    2wk   2.0%     2       1  $  +12.40   100%     0    2747
+  ...
+```
+
+> **Tip:** If you see very few trades and many breakout pauses, SOL was trending (not ranging) during that period. Run `--sweep` to find a looser guard configuration, or try a different date range.
 
 ---
 
@@ -197,7 +203,7 @@ python -m pytest tests/ -k "not integration" -v
 python -m pytest tests/ -v
 ```
 
-All 162 unit tests run in under 2 seconds with no external dependencies.
+All 180 unit tests run in under 2 seconds with no external dependencies.
 
 ---
 
@@ -241,7 +247,7 @@ range_trading_bot/
 
 ## Tick Line Reference
 
-Each closed candle (every 15 minutes) prints one line:
+Each closed candle (every 5 minutes) prints one line:
 
 ```
 [HH:MM] SOL/USDT $82.41 hi:$86.90 | RSI:48.2 MACD:+ ADX:18.3 Vol:^ | Lots:0/4 | Bal:$10,000.00

@@ -57,8 +57,9 @@ def _warm_range_detector(detector: RangeDetector) -> None:
     """Pre-fetch historical candles via REST to seed the range detector."""
     logging.info(f"Warming range detector with {config.RANGE_LOOKBACK_CANDLES} candles of history...")
     exchange = ccxt.binanceus()
+    interval_minutes = int(config.INTERVAL.rstrip("m")) if config.INTERVAL.endswith("m") else int(config.INTERVAL.rstrip("h")) * 60
     since_ms = int(
-        (datetime.now(timezone.utc) - timedelta(minutes=15 * config.RANGE_LOOKBACK_CANDLES)).timestamp() * 1000
+        (datetime.now(timezone.utc) - timedelta(minutes=interval_minutes * config.RANGE_LOOKBACK_CANDLES)).timestamp() * 1000
     )
     current = since_ms
     count = 0

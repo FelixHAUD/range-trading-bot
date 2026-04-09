@@ -2,13 +2,13 @@
 PRIMARY_EXCHANGE   = "binance"
 FALLBACK_EXCHANGE  = "coinbase"
 SYMBOL             = "SOL/USDT"
-INTERVAL           = "15m"
+INTERVAL           = "5m"
 
 # Range boundaries (update manually or automate with range_detector)
 RANGE_SUPPORT      = 78.0
 RANGE_RESISTANCE   = 85.0
-RANGE_BUFFER_PCT   = 0.02     # 2% outside range triggers breakout guard
-BREAKOUT_CONFIRM_CANDLES = 3  # candles inside range before resuming
+RANGE_BUFFER_PCT   = 0.03     # 3% outside range triggers breakout guard
+BREAKOUT_CONFIRM_CANDLES = 2  # candles inside range before resuming
 
 # Dip-buy strategy
 DIP_PCT            = 0.05     # -5% from rolling high to trigger buy
@@ -22,8 +22,8 @@ MIN_BULLISH_SIGNALS = 2       # indicators required to extend hold
 ADX_TREND_THRESHOLD = 25      # ADX above this = trending
 
 # Dynamic range detection
-RANGE_LOOKBACK_CANDLES = 2688   # 4 weeks at 15m (4 * 7 * 24 * 4)
-RANGE_RECALC_CANDLES   = 672    # 1 week at 15m  (7 * 24 * 4)
+RANGE_LOOKBACK_CANDLES = 2016   # 1 week at 5m  (7 * 24 * 12)
+RANGE_RECALC_CANDLES   = 2016   # recalc every week at 5m
 
 # Bearish guard
 MIN_BEARISH_SIGNALS = 3       # 3 of 4 indicators bearish -> block new buys + scan exits
