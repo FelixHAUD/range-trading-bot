@@ -15,6 +15,7 @@ from indicators.rsi import RSI
 from indicators.macd import MACD
 from indicators.adx import ADX
 from indicators.volume import VolumeTracker
+from indicators.ema import EMA
 from strategy.breakout_guard import BreakoutGuard
 from strategy.dip_buy import DipBuyStrategy
 from strategy.hold_extension import HoldExtension
@@ -142,6 +143,8 @@ async def main():
         ),
         max_drawdown_pct=config.MAX_DRAWDOWN_PCT,
         range_detector=detector,
+        trend_ema=EMA(period=config.TREND_EMA_PERIOD),
+        hard_stop_pct=config.HARD_STOP_PCT,
     )
 
     # ── Price feeds ───────────────────────────────────────────────────────────

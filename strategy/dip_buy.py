@@ -19,17 +19,14 @@ class DipBuyStrategy:
         target_pct: float,
         max_lots: int,
         lot_size_usd: float,
-        rolling_high_candles: int = 20,
     ):
         self.dip_pct = dip_pct
         self.target_pct = target_pct
         self.max_lots = max_lots
         self.lot_size_usd = lot_size_usd
-        self.rolling_high_candles = rolling_high_candles
 
         self.open_lots: List[Lot] = []
         self._rolling_high: float | None = None
-        self._recent_closes: list[float] = []
         self._lot_counter: int = 0
 
     def on_candle(self, close: float, timestamp: int) -> list:
@@ -38,13 +35,8 @@ class DipBuyStrategy:
           {"action": "BUY",        "lot": Lot}
           {"action": "SELL_CHECK", "lot": Lot, "gain": float}
         """
-        self._recent_closes.append(close)
-        if len(self._recent_closes) > self.rolling_high_candles:
-            self._recent_closes.pop(0)
-
-        rolling_high = max(self._recent_closes)
-        if self._rolling_high is None:
-            self._rolling_high = rolling_high
+        # Ratchet rolling high upward; only resets down to close after a confirmed BUY.
+        self._rolling_high = max(self._rolling_high or 0.0, close)
 
         signals = []
 
@@ -57,7 +49,7 @@ class DipBuyStrategy:
                 entry_price=close,
                 quantity=self.lot_size_usd / close,
                 entry_time=timestamp,
-                reference_price=self._rolling_high,
+                reference_price=self._rolling_high,  # pre-reset high, used to restore on cancel
             )
             self.open_lots.append(lot)
             signals.append({"action": "BUY", "lot": lot})
@@ -72,4 +64,17 @@ class DipBuyStrategy:
         return signals
 
     def close_lot(self, lot_id: str) -> None:
+        """Remove a lot after a confirmed trade (SELL / BEARISH_EXIT / TRAIL_STOP_HIT)."""
         self.open_lots = [lot for lot in self.open_lots if lot.id != lot_id]
+
+    def cancel_lot(self, lot_id: str) -> None:
+        """Cancel a lot whose BUY was gated by the engine before execution.
+
+        Restores _rolling_high to the pre-buy level (lot.reference_price) so the
+        next candle can still attempt a buy from the same high instead of cascading
+        the trigger 5% deeper with every blocked signal.
+        """
+        lot = next((l for l in self.open_lots if l.id == lot_id), None)
+        if lot is not None:
+            self._rolling_high = lot.reference_price
+        self.open_lots = [l for l in self.open_lots if l.id != lot_id]

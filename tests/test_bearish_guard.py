@@ -22,19 +22,24 @@ def make_lot(entry: float = 100.0, qty: float = 2.5) -> Lot:
 
 
 # All-neutral indicators: RSI=50, MACD bullish, price above midpoint, ADX=20
+# plus_di > minus_di means upward trend — ADX signal will NOT fire
 NEUTRAL = {
     "rsi": 50.0,
     "macd_bullish": True,
     "volume_above_avg": False,
     "adx": 20.0,
+    "plus_di": 20.0,
+    "minus_di": 10.0,
 }
 
-# All-bearish indicators
+# All-bearish indicators: ADX strong with minus_di > plus_di = confirmed downtrend
 ALL_BEARISH = {
     "rsi": 35.0,
     "macd_bullish": False,
     "volume_above_avg": True,
     "adx": 30.0,
+    "plus_di": 10.0,
+    "minus_di": 25.0,
 }
 
 
@@ -91,13 +96,17 @@ class TestEvaluate:
         result = guard.evaluate(MIDPOINT - 0.01, SUPPORT, RESISTANCE, NEUTRAL)
         assert result == "PAUSE_BUYS"
 
-    def test_adx_bearish_strictly_above_25(self):
-        # ADX=25.1 counts; ADX=25.0 does NOT
+    def test_adx_bearish_requires_strong_downtrend(self):
+        # ADX > 25 alone is not enough — minus_di must exceed plus_di (downward direction)
         guard = make_guard(min_bearish=1)
-        above = {**NEUTRAL, "adx": 25.1}
-        at    = {**NEUTRAL, "adx": 25.0}
-        assert guard.evaluate(MIDPOINT + 1, SUPPORT, RESISTANCE, above) == "PAUSE_BUYS"
-        assert guard.evaluate(MIDPOINT + 1, SUPPORT, RESISTANCE, at)    == "NORMAL"
+        bearish_adx = {**NEUTRAL, "adx": 25.1, "plus_di": 10.0, "minus_di": 25.0}
+        bullish_adx = {**NEUTRAL, "adx": 25.1, "plus_di": 25.0, "minus_di": 10.0}
+        equal_di    = {**NEUTRAL, "adx": 25.1, "plus_di": 15.0, "minus_di": 15.0}
+        at_threshold = {**NEUTRAL, "adx": 25.0, "plus_di": 10.0, "minus_di": 25.0}
+        assert guard.evaluate(MIDPOINT + 1, SUPPORT, RESISTANCE, bearish_adx)  == "PAUSE_BUYS"
+        assert guard.evaluate(MIDPOINT + 1, SUPPORT, RESISTANCE, bullish_adx)  == "NORMAL"
+        assert guard.evaluate(MIDPOINT + 1, SUPPORT, RESISTANCE, equal_di)     == "NORMAL"
+        assert guard.evaluate(MIDPOINT + 1, SUPPORT, RESISTANCE, at_threshold) == "NORMAL"  # ADX=25.0 not strictly above
 
 
 # ── BearishGuard.should_exit_lot() ───────────────────────────────────────────

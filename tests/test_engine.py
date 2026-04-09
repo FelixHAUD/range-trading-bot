@@ -16,6 +16,7 @@ from indicators.rsi import RSI
 from indicators.macd import MACD
 from indicators.adx import ADX
 from indicators.volume import VolumeTracker
+from indicators.ema import EMA
 from execution.paper_trader import PaperTrader
 
 SUPPORT = 78.0
@@ -39,6 +40,8 @@ def make_engine(
     min_bullish: int = 2,
     min_bearish: int = 3,
     max_lot_loss_pct: float = 0.07,
+    hard_stop_pct: float = 1.0,       # default=100% (disabled) unless explicitly set
+    trend_ema: EMA | None = None,
 ) -> tuple[StrategyEngine, AsyncMock]:
     alert = AsyncMock()
     engine = StrategyEngine(
@@ -55,6 +58,8 @@ def make_engine(
         resistance=RESISTANCE,
         bearish_guard=BearishGuard(min_bearish=min_bearish, max_lot_loss_pct=max_lot_loss_pct),
         max_drawdown_pct=0.10,
+        hard_stop_pct=hard_stop_pct,
+        trend_ema=trend_ema,
     )
     return engine, alert
 
@@ -334,3 +339,106 @@ class TestBearishGuardEngine:
         engine.trader.buy(lot)
         run(engine.on_candle(make_candle(81.0)))   # 4.7% loss, bearish active, but below threshold
         assert len(engine.dip_buy.open_lots) == 1
+
+
+# ── Hard stop ─────────────────────────────────────────────────────────────────
+
+class TestHardStop:
+    def _open_lot(self, engine: StrategyEngine, entry: float) -> Lot:
+        lot = Lot(id="lot_hs", entry_price=entry, quantity=250.0 / entry,
+                  entry_time=TS, reference_price=entry)
+        engine.dip_buy.open_lots.append(lot)
+        engine.trader.buy(lot)
+        return lot
+
+    def test_hard_stop_closes_lot_at_threshold(self):
+        # entry=82, hard_stop=10%, stop fires at <=73.8
+        engine, _ = make_engine(hard_stop_pct=0.10)
+        self._open_lot(engine, 82.0)
+        run(engine.on_candle(make_candle(73.0)))   # 11% loss → HARD_STOP
+        assert len(engine.dip_buy.open_lots) == 0
+        assert any(t.get("reason") == "HARD_STOP" for t in engine.trader.trades)
+
+    def test_hard_stop_does_not_fire_below_threshold(self):
+        engine, _ = make_engine(hard_stop_pct=0.10)
+        self._open_lot(engine, 82.0)
+        run(engine.on_candle(make_candle(75.0)))   # 8.5% loss < 10% threshold → lot stays
+        assert len(engine.dip_buy.open_lots) == 1
+        assert not any(t.get("reason") == "HARD_STOP" for t in engine.trader.trades)
+
+    def test_hard_stop_fires_regardless_of_bearish_guard_state(self):
+        # min_bearish=99 so bearish guard never activates; hard stop still must fire
+        engine, _ = make_engine(hard_stop_pct=0.10, min_bearish=99)
+        self._open_lot(engine, 82.0)
+        run(engine.on_candle(make_candle(73.0)))   # bearish guard inactive, hard stop still fires
+        assert len(engine.dip_buy.open_lots) == 0
+
+    def test_hard_stop_records_negative_pnl(self):
+        engine, _ = make_engine(hard_stop_pct=0.10)
+        self._open_lot(engine, 82.0)
+        run(engine.on_candle(make_candle(73.0)))
+        sell = next(t for t in engine.trader.trades if t.get("reason") == "HARD_STOP")
+        assert sell["pnl_usd"] < 0
+
+    def test_hard_stop_sends_alert(self):
+        engine, alert = make_engine(hard_stop_pct=0.10)
+        self._open_lot(engine, 82.0)
+        run(engine.on_candle(make_candle(73.0)))
+        assert any("HARD_STOP" in str(c) for c in alert.send.call_args_list)
+
+    def test_hard_stop_disabled_when_pct_is_one(self):
+        # Default hard_stop_pct=1.0 means 100% loss required — effectively disabled
+        engine, _ = make_engine(hard_stop_pct=1.0)
+        self._open_lot(engine, 82.0)
+        run(engine.on_candle(make_candle(1.0)))   # 98.8% loss, but 1.0 threshold not reached (loss=0.988 < 1.0)
+        # Still fires because (1-82)/82 = -0.988 which IS <= -1.0? No: 0.988 < 1.0 → NOT fired
+        assert not any(t.get("reason") == "HARD_STOP" for t in engine.trader.trades)
+
+
+# ── Trend filter ──────────────────────────────────────────────────────────────
+
+class TestTrendFilter:
+    def _make_declining_ema(self, period: int = 3) -> EMA:
+        """Return an EMA that is declining with price below it."""
+        ema = EMA(period=period)
+        for price in [100.0, 99.0, 98.0, 97.0, 96.0]:
+            ema.update(price)
+        # After [100,99,98,97,96] with k=0.5: EMA≈96.94, rising=False, price(96) < EMA
+        return ema
+
+    def test_buy_blocked_when_price_below_declining_ema(self):
+        ema = self._make_declining_ema()
+        engine, _ = make_engine(min_bearish=99, trend_ema=ema)  # bearish guard off
+        # Set rolling high to 100 so a 5% dip at 95 fires; EMA≈96.9 > 95 and still declining
+        engine.dip_buy._rolling_high = 100.0
+        run(engine.on_candle(make_candle(95.0)))   # 5% dip, but trend filter blocks
+        assert len(engine.trader.trades) == 0
+        assert len(engine.dip_buy.open_lots) == 0
+
+    def test_buy_allowed_when_price_above_rising_ema(self):
+        ema = EMA(period=3)
+        for price in [80.0, 81.0, 82.0, 83.0, 84.0]:
+            ema.update(price)
+        # EMA is rising, price (84) above EMA → trend filter inactive
+        engine, _ = make_engine(min_bearish=99, trend_ema=ema)
+        engine.dip_buy._rolling_high = 88.5   # set so 84 = 5% dip from 88.5
+        run(engine.on_candle(make_candle(84.0)))
+        assert any(t["action"] == "BUY" for t in engine.trader.trades)
+
+    def test_buy_allowed_when_price_above_ema(self):
+        # EMA(3) settled ~79 (declining from [82,80,79,78]); price=80.75 > EMA=79 → filter inactive
+        # k=0.5: update(82)=82, update(80)=81, update(79)=80, update(78)=79
+        ema = EMA(period=3)
+        for price in [82.0, 80.0, 79.0, 78.0]:
+            ema.update(price)
+        # EMA≈79, declining; rolling_high=85 → 5% dip at 80.75 which is > EMA=79 → no block
+        engine, _ = make_engine(min_bearish=99, trend_ema=ema)
+        engine.dip_buy._rolling_high = 85.0   # 5% dip lands at 80.75 (within range $76.44–$86.7)
+        run(engine.on_candle(make_candle(80.75)))
+        assert any(t["action"] == "BUY" for t in engine.trader.trades)
+
+    def test_no_filter_when_trend_ema_is_none(self):
+        engine, _ = make_engine(min_bearish=99, trend_ema=None)
+        run(engine.on_candle(make_candle(81.0)))   # rolling high = 81
+        run(engine.on_candle(make_candle(76.5)))   # 5.6% dip → BUY proceeds
+        assert any(t["action"] == "BUY" for t in engine.trader.trades)

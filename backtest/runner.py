@@ -28,6 +28,7 @@ from indicators.rsi import RSI
 from indicators.macd import MACD
 from indicators.adx import ADX
 from indicators.volume import VolumeTracker
+from indicators.ema import EMA
 from strategy.bearish_guard import BearishGuard
 from strategy.breakout_guard import BreakoutGuard
 from strategy.dip_buy import DipBuyStrategy
@@ -96,11 +97,22 @@ async def _run(
     confirm_candles: int,
 ) -> tuple[PaperTrader, StrategyEngine, int]:
     trader = PaperTrader()
+
+    # Pre-warm the range from the first lookback_candles to avoid starting on stale
+    # hardcoded config values when the market was at a very different price.
+    warmup = candles[:min(lookback_candles, len(candles))]
+    if warmup:
+        initial_support = min(c.low for c in warmup)
+        initial_resistance = max(c.high for c in warmup)
+    else:
+        initial_support = config.RANGE_SUPPORT
+        initial_resistance = config.RANGE_RESISTANCE
+
     detector = RangeDetector(
         lookback_candles=lookback_candles,
         recalc_every=recalc_candles,
-        initial_support=config.RANGE_SUPPORT,
-        initial_resistance=config.RANGE_RESISTANCE,
+        initial_support=initial_support,
+        initial_resistance=initial_resistance,
     )
     engine = StrategyEngine(
         guard=BreakoutGuard(buffer_pct, confirm_candles),
@@ -112,27 +124,27 @@ async def _run(
         volume=VolumeTracker(),
         trader=trader,
         alert=_NoAlert(),
-        support=config.RANGE_SUPPORT,
-        resistance=config.RANGE_RESISTANCE,
+        support=initial_support,
+        resistance=initial_resistance,
         bearish_guard=BearishGuard(
             min_bearish=config.MIN_BEARISH_SIGNALS,
             max_lot_loss_pct=config.MAX_LOT_LOSS_PCT,
         ),
         max_drawdown_pct=config.MAX_DRAWDOWN_PCT,
         range_detector=detector,
+        trend_ema=EMA(period=config.TREND_EMA_PERIOD),
+        hard_stop_pct=config.HARD_STOP_PCT,
     )
 
+    # Count distinct breakout events (edge: not paused → paused), not candle-ticks.
     breakout_pauses = 0
-    prev_support = engine.support
-    prev_resistance = engine.resistance
+    was_paused = False
 
     for candle in candles:
         await engine.on_candle(candle)
-        if engine.guard.paused:
+        if engine.guard.paused and not was_paused:
             breakout_pauses += 1
-        if engine.support != prev_support or engine.resistance != prev_resistance:
-            prev_support = engine.support
-            prev_resistance = engine.resistance
+        was_paused = engine.guard.paused
 
     return trader, engine, breakout_pauses
 

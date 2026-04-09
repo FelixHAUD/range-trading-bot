@@ -8,6 +8,7 @@ from indicators.macd import MACD
 from indicators.adx import ADX
 from indicators.volume import VolumeTracker
 from indicators.candles import CandleAggregator
+from indicators.ema import EMA
 
 
 # ── RSI ───────────────────────────────────────────────────────────────────────
@@ -210,6 +211,54 @@ class TestVolumeTracker:
         for _ in range(10):
             vt.update(1000.0)
         assert len(vt._volumes) == 3
+
+
+# ── EMA ──────────────────────────────────────────────────────────────────────
+
+class TestEMA:
+    def test_value_none_before_first_update(self):
+        ema = EMA(period=5)
+        assert ema.value is None
+
+    def test_value_set_after_first_update(self):
+        ema = EMA(period=5)
+        ema.update(100.0)
+        assert ema.value == 100.0
+
+    def test_ema_approaches_price_on_sustained_move(self):
+        ema = EMA(period=3)  # k = 0.5
+        ema.update(100.0)   # EMA = 100
+        ema.update(100.0)   # EMA = 100
+        ema.update(200.0)   # EMA = 150
+        assert ema.value == pytest.approx(150.0)
+
+    def test_rising_false_on_first_update(self):
+        ema = EMA(period=5)
+        ema.update(100.0)
+        assert ema.rising is False
+
+    def test_rising_true_when_price_climbs(self):
+        ema = EMA(period=3)
+        ema.update(100.0)
+        ema.update(110.0)   # EMA moves up → rising
+        assert ema.rising is True
+
+    def test_rising_false_when_price_falls(self):
+        ema = EMA(period=3)
+        ema.update(100.0)
+        ema.update(90.0)    # EMA moves down → not rising
+        assert ema.rising is False
+
+    def test_ema_smooths_spike(self):
+        # After a spike and return, EMA should not return to base immediately
+        ema = EMA(period=5)  # k = 1/3
+        for _ in range(10):
+            ema.update(100.0)
+        ema.update(200.0)   # spike
+        assert ema.value is not None and ema.value < 200.0
+
+    def test_default_period_is_50(self):
+        assert EMA().period == 50
 
 
 # ── CandleAggregator (stub) ───────────────────────────────────────────────────

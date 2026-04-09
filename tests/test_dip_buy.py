@@ -13,8 +13,7 @@ TS = 1_700_000_000_000
 
 
 def make_strategy(**kwargs) -> DipBuyStrategy:
-    defaults = dict(dip_pct=DIP, target_pct=TARGET, max_lots=MAX_LOTS,
-                    lot_size_usd=LOT_USD, rolling_high_candles=5)
+    defaults = dict(dip_pct=DIP, target_pct=TARGET, max_lots=MAX_LOTS, lot_size_usd=LOT_USD)
     defaults.update(kwargs)
     return DipBuyStrategy(**defaults)
 
@@ -27,13 +26,12 @@ class TestRollingHigh:
         signals = s.on_candle(100.0, TS)
         assert signals == []
 
-    def test_rolling_high_tracks_max_of_window(self):
-        s = make_strategy(rolling_high_candles=3)
+    def test_rolling_high_ratchets_up_with_price(self):
+        s = make_strategy()
         s.on_candle(100.0, TS)
-        s.on_candle(102.0, TS)
-        s.on_candle(101.0, TS)
-        assert s._rolling_high == 100.0   # set on first candle, hasn't reset
-        # after a buy it resets to close
+        s.on_candle(102.0, TS)  # ratchets up to 102
+        s.on_candle(101.0, TS)  # stays at 102 (no new high)
+        assert s._rolling_high == 102.0
 
 
 # ── BUY signal ────────────────────────────────────────────────────────────────
@@ -168,3 +166,45 @@ class TestCloseLot:
         s.close_lot(id_to_close)
         assert len(s.open_lots) == 1
         assert s.open_lots[0].id != id_to_close
+
+
+# ── cancel_lot ────────────────────────────────────────────────────────────────
+
+class TestCancelLot:
+    def test_cancel_lot_removes_lot(self):
+        s = make_strategy()
+        s.on_candle(100.0, TS)
+        s.on_candle(94.0, TS)
+        lot_id = s.open_lots[0].id
+        s.cancel_lot(lot_id)
+        assert len(s.open_lots) == 0
+
+    def test_cancel_lot_restores_rolling_high_to_pre_buy_level(self):
+        # Buy fires at 94 (6% drop from 100). rolling_high resets to 94.
+        # cancel_lot must restore it to 100 (the lot's reference_price).
+        s = make_strategy()
+        s.on_candle(100.0, TS)
+        s.on_candle(94.0, TS)
+        assert s._rolling_high == 94.0, "setup: rolling high should be at buy price"
+        lot_id = s.open_lots[0].id
+        s.cancel_lot(lot_id)
+        assert s._rolling_high == 100.0  # restored to pre-buy high
+
+    def test_cancel_lot_allows_rebuy_on_same_dip(self):
+        # After cancel, the next candle at the same dip price should generate a BUY again.
+        s = make_strategy()
+        s.on_candle(100.0, TS)
+        s.on_candle(94.0, TS)           # BUY signal, rolling_high resets to 94
+        s.cancel_lot(s.open_lots[0].id) # rolling_high restored to 100
+        signals = s.on_candle(94.0, TS) # price still at dip: 6% below 100 → BUY again
+        buys = [sig for sig in signals if sig["action"] == "BUY"]
+        assert len(buys) == 1
+
+    def test_cancel_lot_unknown_id_is_noop(self):
+        s = make_strategy()
+        s.on_candle(100.0, TS)
+        s.on_candle(94.0, TS)
+        high_before = s._rolling_high
+        s.cancel_lot("nonexistent_id")
+        assert len(s.open_lots) == 1
+        assert s._rolling_high == high_before

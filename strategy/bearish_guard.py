@@ -9,7 +9,7 @@ class BearishGuard:
       - RSI < 40             (declining momentum)
       - not macd_bullish     (MACD falling / below signal line)
       - price < range midpoint (price biased to lower half)
-      - ADX > 25             (strong directional trend — bearish in context of above)
+      - ADX > 25 AND minus_di > plus_di  (strong trend confirmed as downward by DI lines)
 
     When >= min_bearish signals fire:
       - evaluate() returns "PAUSE_BUYS" → engine skips new lot purchases
@@ -31,11 +31,15 @@ class BearishGuard:
         indicators: dict,
     ) -> str:
         midpoint = (support + resistance) / 2.0
+        adx_bearish = (
+            indicators.get("adx", 0.0) > 25.0
+            and indicators.get("minus_di", 0.0) > indicators.get("plus_di", 0.0)
+        )
         bearish = sum([
             indicators.get("rsi", 50.0) < 40.0,
             not indicators.get("macd_bullish", True),
             price < midpoint,
-            indicators.get("adx", 0.0) > 25.0,
+            adx_bearish,
         ])
         return "PAUSE_BUYS" if bearish >= self.min_bearish else "NORMAL"
 

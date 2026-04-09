@@ -6,6 +6,8 @@ class ADX:
         self.period = period
         self._candles: deque[tuple[float, float, float]] = deque(maxlen=period + 1)
         self.value: float = 0.0
+        self.plus_di: float = 0.0   # +DI: upward directional component
+        self.minus_di: float = 0.0  # -DI: downward directional component
 
     def update(self, high: float, low: float, close: float) -> None:
         self._candles.append((high, low, close))
@@ -45,3 +47,5 @@ class ADX:
             return
 
         self.value = 100.0 * abs(plus_di - minus_di) / di_sum
+        self.plus_di = plus_di
+        self.minus_di = minus_di

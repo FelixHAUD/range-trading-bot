@@ -14,6 +14,7 @@ from indicators.volume import VolumeTracker
 
 if TYPE_CHECKING:
     from strategy.range_detector import RangeDetector
+    from indicators.ema import EMA
 
 
 class StrategyEngine:
@@ -33,6 +34,8 @@ class StrategyEngine:
         bearish_guard: BearishGuard | None = None,
         max_drawdown_pct: float = 1.0,
         range_detector: "RangeDetector | None" = None,
+        trend_ema: "EMA | None" = None,
+        hard_stop_pct: float = 1.0,
     ):
         self.guard = guard
         self.dip_buy = dip_buy
@@ -48,6 +51,8 @@ class StrategyEngine:
         self.bearish_guard = bearish_guard
         self.max_drawdown_pct = max_drawdown_pct
         self.range_detector = range_detector
+        self.trend_ema = trend_ema
+        self.hard_stop_pct = hard_stop_pct
         self._initial_balance: float = trader.balance_usd
         self._log = logging.getLogger("engine")
 
@@ -60,8 +65,12 @@ class StrategyEngine:
         lots = len(self.dip_buy.open_lots)
         rolling_high = self.dip_buy._rolling_high
         high_str = f" hi:${rolling_high:.2f}" if rolling_high is not None else ""
+        ema_str = ""
+        if self.trend_ema is not None and self.trend_ema.value is not None:
+            arrow = "^" if self.trend_ema.rising else "v"
+            ema_str = f" EMA:{self.trend_ema.value:.2f}{arrow}"
         self._log.info(
-            f"[{ts}] {candle.symbol} ${candle.close:.2f}{high_str} | "
+            f"[{ts}] {candle.symbol} ${candle.close:.2f}{high_str}{ema_str} | "
             f"RSI:{rsi} MACD:{macd} ADX:{adx} Vol:{vol} | "
             f"Lots:{lots}/{self.dip_buy.max_lots} | Bal:${self.trader.balance_usd:,.2f}"
         )
@@ -75,6 +84,8 @@ class StrategyEngine:
         self.macd.update(candle.close)
         self.adx.update(candle.high, candle.low, candle.close)
         self.volume.update(candle.volume)
+        if self.trend_ema is not None:
+            self.trend_ema.update(candle.close)
 
         self._log_tick(candle)
 
@@ -82,7 +93,22 @@ class StrategyEngine:
         if self.range_detector is not None:
             self.support, self.resistance = self.range_detector.update(candle)
 
-        # Breakout guard gates everything
+        # Hard stop — runs unconditionally before any other gate.
+        # Protects open lots even when the breakout guard has paused the bot.
+        for lot in list(self.dip_buy.open_lots):
+            loss = (candle.close - lot.entry_price) / lot.entry_price
+            if loss <= -self.hard_stop_pct:
+                pnl = self.trader.sell(lot, candle.close, reason="HARD_STOP")
+                self.dip_buy.close_lot(lot.id)
+                self._log.warning(
+                    f">>> HARD_STOP {lot.id} @ ${candle.close:.2f} | "
+                    f"loss:{loss:.1%} | PnL:${pnl:+.2f} | Bal:${self.trader.balance_usd:,.2f}"
+                )
+                await self.alert.send(
+                    f"HARD_STOP {lot.id} @ ${candle.close:.2f} | PnL: ${pnl:.2f}"
+                )
+
+        # Breakout guard gates everything below this point
         if not self.guard.check(candle.close, self.support, self.resistance):
             self._log.warning(f"[GUARD] PAUSED -- breakout at ${candle.close:.2f}")
             await self.alert.send(
@@ -91,11 +117,14 @@ class StrategyEngine:
             return
 
         # RSI defaults to neutral (50) when not yet warmed up — avoids false bearish signals
+        # plus_di/minus_di expose ADX direction so BearishGuard can check trend orientation
         indicators = {
             "rsi": self.rsi.value if self.rsi.value is not None else 50.0,
             "macd_bullish": self.macd.bullish,
             "volume_above_avg": self.volume.above_average,
             "adx": self.adx.value,
+            "plus_di": self.adx.plus_di,
+            "minus_di": self.adx.minus_di,
         }
 
         # Bearish guard evaluation
@@ -110,6 +139,14 @@ class StrategyEngine:
                     f"| RSI:{indicators['rsi']:.1f} ADX:{indicators['adx']:.1f}"
                 )
 
+        # Macro trend filter: price below declining EMA → skip new entries
+        trend_bearish = (
+            self.trend_ema is not None
+            and self.trend_ema.value is not None
+            and candle.close < self.trend_ema.value
+            and not self.trend_ema.rising
+        )
+
         signals = self.dip_buy.on_candle(candle.close, candle.timestamp)
 
         for sig in signals:
@@ -119,7 +156,16 @@ class StrategyEngine:
                 # Gate: skip buy if bearish guard is active
                 if bearish_state == "PAUSE_BUYS":
                     self._log.info(f"    BUY skipped -- bearish guard active")
-                    self.dip_buy.close_lot(lot.id)
+                    self.dip_buy.cancel_lot(lot.id)   # restores _rolling_high to pre-buy level
+                    continue
+
+                # Gate: skip buy if macro trend filter active
+                if trend_bearish:
+                    self._log.info(
+                        f"    BUY skipped -- trend filter: ${candle.close:.2f} "
+                        f"below declining EMA ${self.trend_ema.value:.2f}"
+                    )
+                    self.dip_buy.cancel_lot(lot.id)
                     continue
 
                 # Gate: skip buy if portfolio drawdown limit hit
@@ -128,7 +174,7 @@ class StrategyEngine:
                     self._log.warning(
                         f"    BUY skipped -- drawdown {drawdown:.1%} >= limit {self.max_drawdown_pct:.0%}"
                     )
-                    self.dip_buy.close_lot(lot.id)
+                    self.dip_buy.cancel_lot(lot.id)   # restores _rolling_high to pre-buy level
                     continue
 
                 self.trader.buy(lot)
