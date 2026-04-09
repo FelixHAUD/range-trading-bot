@@ -21,6 +21,10 @@ TRAIL_PCT          = 0.02     # trailing stop 2% below running high
 MIN_BULLISH_SIGNALS = 2       # indicators required to extend hold
 ADX_TREND_THRESHOLD = 25      # ADX above this = trending
 
+# Dynamic range detection
+RANGE_LOOKBACK_CANDLES = 2688   # 4 weeks at 15m (4 * 7 * 24 * 4)
+RANGE_RECALC_CANDLES   = 672    # 1 week at 15m  (7 * 24 * 4)
+
 # Risk limits
 MAX_DRAWDOWN_PCT   = 0.10     # pause bot if portfolio drops 10%
 MAX_DAILY_LOSS_USD = 100.0
