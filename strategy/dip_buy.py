@@ -27,6 +27,7 @@ class DipBuyStrategy:
 
         self.open_lots: List[Lot] = []
         self._rolling_high: float | None = None
+        self._pending_dip_high: float | None = None
         self._lot_counter: int = 0
 
     def on_candle(self, close: float, timestamp: int) -> list:
@@ -38,10 +39,20 @@ class DipBuyStrategy:
         # Ratchet rolling high upward; only resets down to close after a confirmed BUY.
         self._rolling_high = max(self._rolling_high or 0.0, close)
 
+        # Clear pending dip if price has recovered above the original high
+        if self._pending_dip_high is not None and close >= self._pending_dip_high:
+            self._pending_dip_high = None
+
+        # Use the higher of rolling_high or pending_dip_high so a previously
+        # blocked dip is still visible on the next candle after the gate clears.
+        effective_high = self._rolling_high
+        if self._pending_dip_high is not None and self._pending_dip_high > self._rolling_high:
+            effective_high = self._pending_dip_high
+
         signals = []
 
-        # BUY signal — price dropped >= dip_pct from rolling high
-        drop = (self._rolling_high - close) / self._rolling_high
+        # BUY signal — price dropped >= dip_pct from effective high
+        drop = (effective_high - close) / effective_high
         if drop >= self.dip_pct and len(self.open_lots) < self.max_lots:
             self._lot_counter += 1
             lot = Lot(
@@ -49,11 +60,12 @@ class DipBuyStrategy:
                 entry_price=close,
                 quantity=self.lot_size_usd / close,
                 entry_time=timestamp,
-                reference_price=self._rolling_high,  # pre-reset high, used to restore on cancel
+                reference_price=effective_high,
             )
             self.open_lots.append(lot)
             signals.append({"action": "BUY", "lot": lot})
-            self._rolling_high = close   # reset so next dip is measured from new base
+            self._rolling_high = close
+            self._pending_dip_high = None
 
         # SELL CHECK — per lot
         for lot in list(self.open_lots):
@@ -70,11 +82,12 @@ class DipBuyStrategy:
     def cancel_lot(self, lot_id: str) -> None:
         """Cancel a lot whose BUY was gated by the engine before execution.
 
-        Restores _rolling_high to the pre-buy level (lot.reference_price) so the
-        next candle can still attempt a buy from the same high instead of cascading
-        the trigger 5% deeper with every blocked signal.
+        Sets _rolling_high to the entry price (prevents downward cascade) and
+        stores the original high in _pending_dip_high so the next candle can
+        re-attempt the buy without requiring a fresh full dip.
         """
         lot = next((l for l in self.open_lots if l.id == lot_id), None)
         if lot is not None:
-            self._rolling_high = lot.reference_price
+            self._pending_dip_high = lot.reference_price
+            self._rolling_high = lot.entry_price
         self.open_lots = [l for l in self.open_lots if l.id != lot_id]

@@ -179,26 +179,61 @@ class TestCancelLot:
         s.cancel_lot(lot_id)
         assert len(s.open_lots) == 0
 
-    def test_cancel_lot_restores_rolling_high_to_pre_buy_level(self):
+    def test_cancel_lot_sets_pending_dip_high(self):
         # Buy fires at 94 (6% drop from 100). rolling_high resets to 94.
-        # cancel_lot must restore it to 100 (the lot's reference_price).
+        # cancel_lot sets _rolling_high to entry (94) and _pending_dip_high to original (100).
         s = make_strategy()
         s.on_candle(100.0, TS)
         s.on_candle(94.0, TS)
         assert s._rolling_high == 94.0, "setup: rolling high should be at buy price"
         lot_id = s.open_lots[0].id
         s.cancel_lot(lot_id)
-        assert s._rolling_high == 100.0  # restored to pre-buy high
+        assert s._rolling_high == 94.0
+        assert s._pending_dip_high == 100.0
 
     def test_cancel_lot_allows_rebuy_on_same_dip(self):
-        # After cancel, the next candle at the same dip price should generate a BUY again.
+        # After cancel, the next candle at the same dip price should generate a BUY again
+        # via _pending_dip_high (94 is 6% below pending high of 100).
         s = make_strategy()
         s.on_candle(100.0, TS)
         s.on_candle(94.0, TS)           # BUY signal, rolling_high resets to 94
-        s.cancel_lot(s.open_lots[0].id) # rolling_high restored to 100
-        signals = s.on_candle(94.0, TS) # price still at dip: 6% below 100 → BUY again
+        s.cancel_lot(s.open_lots[0].id) # pending_dip_high=100, rolling_high=94
+        signals = s.on_candle(94.0, TS) # effective_high=100, drop=6% → BUY
         buys = [sig for sig in signals if sig["action"] == "BUY"]
         assert len(buys) == 1
+
+    def test_cancel_allows_buy_at_partial_recovery(self):
+        # Price dips 6% from 100 to 94, blocked, then recovers to 95.
+        # 95 is only 5% below 100 — would miss without pending_dip_high.
+        s = make_strategy()
+        s.on_candle(100.0, TS)
+        s.on_candle(94.0, TS)
+        s.cancel_lot(s.open_lots[0].id)
+        signals = s.on_candle(95.0, TS)  # effective_high=100, drop=5% < 6% → no BUY
+        buys = [sig for sig in signals if sig["action"] == "BUY"]
+        # DIP_PCT is 0.05 (5%) in test config, so 5% drop DOES trigger
+        assert len(buys) == 1
+
+    def test_pending_dip_clears_on_full_recovery(self):
+        # Price recovers above the pending high — opportunity is over.
+        s = make_strategy()
+        s.on_candle(100.0, TS)
+        s.on_candle(94.0, TS)
+        s.cancel_lot(s.open_lots[0].id)
+        assert s._pending_dip_high == 100.0
+        s.on_candle(101.0, TS)  # price above pending high → clear
+        assert s._pending_dip_high is None
+
+    def test_no_cascade_on_repeated_cancel(self):
+        # Gate blocks twice in a row — pending_dip_high stays at the original 100.
+        s = make_strategy()
+        s.on_candle(100.0, TS)
+        s.on_candle(94.0, TS)            # BUY #1
+        s.cancel_lot(s.open_lots[0].id)  # pending=100, rolling=94
+        s.on_candle(94.0, TS)            # BUY #2 via pending (drop=6%)
+        s.cancel_lot(s.open_lots[0].id)  # pending stays at 100 (reference_price=100)
+        assert s._pending_dip_high == 100.0
+        assert s._rolling_high == 94.0
 
     def test_cancel_lot_unknown_id_is_noop(self):
         s = make_strategy()

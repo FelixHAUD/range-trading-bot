@@ -11,7 +11,7 @@ RANGE_BUFFER_PCT   = 0.02     # 2% outside range triggers breakout guard (sweep-
 BREAKOUT_CONFIRM_CANDLES = 2  # candles inside range before resuming
 
 # Dip-buy strategy
-DIP_PCT            = 0.05     # -5% from rolling high to trigger buy
+DIP_PCT            = 0.06     # -6% from rolling high to trigger buy (widened to filter false dips)
 TARGET_PCT         = 0.05     # +5% from lot entry to trigger sell check
 MAX_LOTS           = 4        # max simultaneous open lots
 LOT_SIZE_USD       = 250      # dollar size per lot
@@ -27,13 +27,13 @@ RANGE_RECALC_CANDLES   = 2016   # recalc every week at 5m
 
 # Bearish guard
 MIN_BEARISH_SIGNALS = 3       # 3 of 4 indicators bearish -> block new buys + scan exits
-MAX_LOT_LOSS_PCT    = 0.05    # force-exit any open lot losing >= 5% when bearish active (tightened from 7%)
+MAX_LOT_LOSS_PCT    = 0.03    # force-exit any open lot losing >= 3% when bearish active (tightened from 5%)
 
 # Hard stop-loss — unconditional, fires regardless of bearish guard state
-HARD_STOP_PCT      = 0.15     # close any lot down >=15% from entry immediately
+HARD_STOP_PCT      = 0.08     # close any lot down >=8% from entry immediately (tightened from 15%)
 
 # Macro trend filter — block new buys when price is below a declining EMA
-TREND_EMA_PERIOD   = 50       # candles (50 × 5m ≈ 4 hours; tune higher for slower filter)
+TREND_EMA_PERIOD   = 30       # candles (30 × 5m ≈ 2.5 hours; faster trend response)
 
 # Risk limits
 MAX_DRAWDOWN_PCT   = 0.10     # pause bot if portfolio drops 10%

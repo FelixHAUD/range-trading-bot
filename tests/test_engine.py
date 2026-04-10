@@ -442,3 +442,45 @@ class TestTrendFilter:
         run(engine.on_candle(make_candle(81.0)))   # rolling high = 81
         run(engine.on_candle(make_candle(76.5)))   # 5.6% dip → BUY proceeds
         assert any(t["action"] == "BUY" for t in engine.trader.trades)
+
+
+# ── Pending dip retry after gate clears ──────────────────────────────────────
+
+class TestPendingDipRetry:
+    def test_buy_retries_after_bearish_guard_clears(self):
+        # min_bearish=2: price below midpoint(81.5) + MACD not ready = 2 signals → PAUSE_BUYS
+        engine, _ = make_engine(min_bearish=2)
+        run(engine.on_candle(make_candle(82.0)))   # rolling high = 82
+        run(engine.on_candle(make_candle(76.5)))   # 6.7% dip → BUY generated, blocked by bearish
+        assert len(engine.trader.trades) == 0
+        # pending_dip_high should be set, allowing retry
+        assert engine.dip_buy._pending_dip_high is not None
+
+        # Now feed a candle where bearish guard won't fire (price above midpoint)
+        # min_bearish=2 needs 2 signals; at 82.0 only MACD(not ready)=1 signal → NORMAL
+        run(engine.on_candle(make_candle(78.0)))   # still 4.9% below pending high of 82
+        # With DIP_PCT=0.05: drop = (82-78)/82 = 4.9% < 5% → no buy from pending
+        # Actually at 78.0: price < midpoint(81.5) → 2 signals → still bearish
+        # Use price above midpoint to clear bearish
+        run(engine.on_candle(make_candle(82.0)))   # above midpoint, only 1 signal → NORMAL
+        # But 82 >= pending_dip_high(82) → pending cleared. Let's use a different setup.
+
+        # Reset and use a cleaner scenario
+        engine, _ = make_engine(min_bearish=2)
+        run(engine.on_candle(make_candle(84.0)))   # rolling high = 84
+        run(engine.on_candle(make_candle(78.0)))   # 7.1% dip, price<midpoint + MACD = 2 → blocked
+        assert len(engine.trader.trades) == 0
+        assert engine.dip_buy._pending_dip_high is not None
+
+        # Price at 80.0: above midpoint(81.5)? No, 80<81.5. Still 2 signals.
+        # Need min_bearish=3 for the retry candle so bearish doesn't fire.
+        engine, _ = make_engine(min_bearish=2)
+        # Warm up rolling high above range so dip lands inside range
+        run(engine.on_candle(make_candle(84.0)))   # rolling high
+        # Force bearish by going below midpoint with enough signals
+        run(engine.on_candle(make_candle(78.0)))   # 7.1% dip, blocked by bearish (2 signals)
+        assert len(engine.trader.trades) == 0
+        # Now increase min_bearish threshold to simulate guard clearing
+        engine.bearish_guard.min_bearish = 99      # effectively disable bearish guard
+        run(engine.on_candle(make_candle(79.5)))   # effective_high=84, drop=5.4% ≥ 5% → BUY
+        assert any(t["action"] == "BUY" for t in engine.trader.trades)
