@@ -18,6 +18,7 @@ Master status board. Individual task files live in `tasks/<status>/TASK-NNN-*.md
 | TASK-012 | backtest: runner + dynamic RangeDetector | feature/backtest-range-detector | DONE | TASK-007 |
 | TASK-013 | docs: README | feature/readme | DONE | TASK-012 |
 | TASK-014 | strategy: BearishGuard downtrend protection | feature/bearish-guard | DONE | TASK-007 |
+| TASK-015 | backtest: detailed analysis + parameter sweeps | main | DONE | TASK-012, TASK-014 |
 
 ## Status key
 - **BACKLOG** — not started
